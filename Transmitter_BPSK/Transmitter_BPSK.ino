@@ -1,10 +1,29 @@
-int dlay = 0;
+  /*
+  static int bums = 0;
+  
+  i = (i + 1) % 360;
+  i == 0 ? periods = (periods + 1) % 6 : periods = periods;
+  if (periods == 0 && i == 0){ 
+    //InpData = !digitalRead(InterruptPin);
+    InpData =  dataA[bums];
+    bums = (bums + 1) % 8;
+  }
+
+  PORTC = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 1;
+  PORTB = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 3;
+  */
+
+
+int dlay = 1;
 int i = 0;
 
 bool dataA [8] = {0, 0, 0, 0, 0, 1, 1, 0};
 
 int periods = 0;
 bool InpData = 0;
+
+enum ST {Wait, Preamble, Data, InterframeGap};  
+typedef enum ST States;
 
 const int sineLUT[360] = {128,130,132,134,136,139,141,143,
                           145,147,150,152,154,156,158,160,
@@ -56,43 +75,99 @@ const int sineLUT[360] = {128,130,132,134,136,139,141,143,
 
 void setup() {
   // put your setup code here, to run once:
-  
-  pinMode(InterruptPin, INPUT_PULLUP);  
+
+  Serial.begin(115200);
   DDRB = B111111;
   DDRC = B111111;
+  pinMode(6, OUTPUT);
 
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
 
-  delay(1);
-  static int bums = 0;
-  
-  i = (i + 1) % 360;
-  i == 0 ? periods = (periods + 1) % 6 : periods = periods;
-  if (periods == 0 && i == 0){ 
-    //InpData = !digitalRead(InterruptPin);
-    InpData =  dataA[bums];
-    bums = (bums + 1) % 8;
-  }
-
-  PORTC = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 1;
-  PORTB = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 3;
+  ControllFSM();
 }
 
 int ManchesterEncoding (bool data, int periods, int phase){
 
-  if (periods < 3 && data == false) {
+  if (periods < 2 && data == false) {
     return phase;
   }
-  else if (periods < 3 && data == true) {
+  else if (periods < 2 && data == true) {
     return (phase + 180) % 360;  
   }
-  else if (periods < 6 && data == false) {
+  else if (periods < 4 && data == false) {
     return (phase + 180) % 360; 
   }
-  else if (periods < 6 && data == true){
+  else if (periods < 4 && data == true){
     return phase;  
   }
+}
+
+int ControllFSM () {
+
+  static ST State = Wait; 
+  bool preamble [6] = {1, 0, 1, 0, 1, 1};
+  int bits = 0;
+  int debug = 0;
+  static uint8_t data = 0;
+
+  switch (State) {
+
+    case Wait: // Just wait for data, and send dc voltage.
+      if (Serial.available()> 0){
+        data = Serial.read();
+        if (data == '\n'){
+          State = Wait;
+        }else {
+          State = Preamble;
+        }
+        Serial.println("True");
+      }
+      PORTC = 128 >> 1;
+      PORTB = 128 >> 3;
+    break;
+    case Preamble: //Send 1010(Cariersync)11(Start of Frame)
+            
+      while (bits < 6) {
+        delay(dlay);
+        i = (i + 1) % 360;
+        i == 0 ? periods = (periods + 1) % 4 : periods = periods;
+        if (periods == 0 && i == 0){ 
+          bits++;
+        }
+        InpData =  preamble[bits];
+        PORTC = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 1;
+        PORTB = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 3;
+        digitalWrite(6, InpData);
+      }  
+      State = Data;
+   
+    break;
+    case Data:  
+      while (bits < 8) {
+        delay(dlay);
+        i = (i + 1) % 360;
+        i == 0 ? periods = (periods + 1) % 4 : periods = periods;
+        if (periods == 0 && i == 0){ 
+          bits++;
+        }
+        InpData = bitRead(data, 7-bits);
+        PORTC = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 1;
+        PORTB = sineLUT[ManchesterEncoding(InpData, periods, i)] >> 3;
+        digitalWrite(6, InpData);
+      }  
+      State = InterframeGap;
+    break;
+    case InterframeGap:
+      PORTC = 128 >> 1;
+      PORTB = 128 >> 3;
+      data = 0;
+      digitalWrite(6, LOW);
+      delay (1000);
+      State = Wait;
+    break;
+  }
+  return 0;
 }
